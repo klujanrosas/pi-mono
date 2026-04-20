@@ -79,6 +79,7 @@ import { type SessionContext, SessionManager } from "../../core/session-manager.
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
 import type { SourceInfo } from "../../core/source-info.js";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.js";
+import { AUTO_TITLE_MODEL_ID, AUTO_TITLE_PROVIDER_ID, runAutoTitleCycle } from "../../core/title-generator.js";
 import type { TruncationResult } from "../../core/tools/truncate.js";
 import { getChangelogPath, getNewEntries, parseChangelog } from "../../utils/changelog.js";
 import { copyToClipboard } from "../../utils/clipboard.js";
@@ -312,6 +313,11 @@ export class InteractiveMode {
 
 	// Shutdown state
 	private shutdownRequested = false;
+
+	// Auto session title state
+	private autoTitleEnabled = false;
+	private autoTitleNoticeShown = false;
+	private autoTitleAbortController: AbortController | undefined = undefined;
 
 	// Extension UI state
 	private extensionSelector: ExtensionSelectorComponent | undefined = undefined;
@@ -662,6 +668,11 @@ export class InteractiveMode {
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
 
+		// Auto-title state: respects manual /name entries from prior sessions and
+		// shows a one-shot warning if Anthropic OAuth (Claude Code) is missing.
+		this.refreshAutoTitleEnabled();
+		this.showAutoTitleAuthWarningIfNeeded();
+
 		// Set up theme file watcher
 		onThemeChange(() => {
 			this.ui.invalidate();
@@ -689,6 +700,83 @@ export class InteractiveMode {
 		} else {
 			this.ui.terminal.setTitle(`${APP_TITLE} - ${cwdBasename}`);
 		}
+	}
+
+	/**
+	 * Refresh whether auto-title generation is allowed for this session.
+	 * Auto-titling stays on while the session has either no `session_info`
+	 * entry yet, or the latest entry is one we wrote ourselves (`source: "auto"`).
+	 * A manual `/name` (or extension `setSessionName`) flips the source to
+	 * `"user"` and permanently disables auto-titling for the session.
+	 */
+	private refreshAutoTitleEnabled(): void {
+		const model = this.session.modelRegistry.find(AUTO_TITLE_PROVIDER_ID, AUTO_TITLE_MODEL_ID);
+		const hasOAuth = !!model && this.session.modelRegistry.isUsingOAuth(model);
+		const source = this.sessionManager.getSessionNameSource();
+		this.autoTitleEnabled = !!model && hasOAuth && (source === undefined || source === "auto");
+	}
+
+	/**
+	 * Show the one-shot startup warning when Anthropic OAuth is missing.
+	 * Idempotent across session lifetime; only fires once.
+	 */
+	private showAutoTitleAuthWarningIfNeeded(): void {
+		if (this.autoTitleNoticeShown) return;
+		const model = this.session.modelRegistry.find(AUTO_TITLE_PROVIDER_ID, AUTO_TITLE_MODEL_ID);
+		const hasOAuth = !!model && this.session.modelRegistry.isUsingOAuth(model);
+		if (hasOAuth) return;
+		this.autoTitleNoticeShown = true;
+		this.showWarning(
+			`Auto session titles disabled: no Claude Code OAuth configured. Run /login ${AUTO_TITLE_PROVIDER_ID}.`,
+		);
+	}
+
+	/**
+	 * Cancel any in-flight auto-title request and start a fresh one.
+	 * Awaits silently in the background; failures never bubble up.
+	 */
+	private scheduleAutoTitleGeneration(): void {
+		if (!this.autoTitleEnabled) return;
+		const messages = this.session.messages;
+		if (!messages || messages.length === 0) return;
+
+		// Cancel any prior in-flight generation; we always prefer the freshest
+		// snapshot of the conversation.
+		this.autoTitleAbortController?.abort();
+		const abort = new AbortController();
+		this.autoTitleAbortController = abort;
+
+		const snapshot = messages.slice();
+
+		void (async () => {
+			try {
+				const result = await runAutoTitleCycle({
+					sessionManager: this.sessionManager,
+					modelRegistry: this.session.modelRegistry,
+					messages: snapshot,
+					signal: abort.signal,
+				});
+				if (abort.signal.aborted) return;
+				if (result.status === "applied") {
+					this.updateTerminalTitle();
+					this.ui.requestRender();
+				} else if (result.status === "skipped") {
+					if (
+						result.reason === "manual-name-set" ||
+						result.reason === "model-missing" ||
+						result.reason === "no-oauth"
+					) {
+						this.autoTitleEnabled = false;
+					}
+				}
+			} catch {
+				// Swallow; title generation must never crash the session.
+			} finally {
+				if (this.autoTitleAbortController === abort) {
+					this.autoTitleAbortController = undefined;
+				}
+			}
+		})();
 	}
 
 	/**
@@ -2818,6 +2906,12 @@ export class InteractiveMode {
 				this.pendingTools.clear();
 
 				await this.checkShutdownRequested();
+
+				// Re-evaluate (a /name in this turn may have flipped the source) and
+				// kick off background title generation. Never awaited: title work
+				// runs alongside the next turn.
+				this.refreshAutoTitleEnabled();
+				this.scheduleAutoTitleGeneration();
 
 				this.ui.requestRender();
 				break;
@@ -4968,7 +5062,9 @@ export class InteractiveMode {
 			return;
 		}
 
-		this.sessionManager.appendSessionInfo(name);
+		this.sessionManager.appendSessionInfo(name, "user");
+		this.autoTitleAbortController?.abort();
+		this.refreshAutoTitleEnabled();
 		this.updateTerminalTitle();
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Text(theme.fg("dim", `Session name set: ${name}`), 1, 0));

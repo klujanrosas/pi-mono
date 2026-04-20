@@ -2166,7 +2166,9 @@ export class AgentSession {
 					this.sessionManager.appendCustomEntry(customType, data);
 				},
 				setSessionName: (name) => {
-					this.sessionManager.appendSessionInfo(name);
+					// Extension-supplied names are treated as user intent; this permanently
+					// disables auto-title generation for the session.
+					this.sessionManager.appendSessionInfo(name, "user");
 				},
 				getSessionName: () => {
 					return this.sessionManager.getSessionName();
@@ -2647,7 +2649,7 @@ export class AgentSession {
 	 * Set a display name for the current session.
 	 */
 	setSessionName(name: string): void {
-		this.sessionManager.appendSessionInfo(name);
+		this.sessionManager.appendSessionInfo(name, "user");
 	}
 
 	// =========================================================================

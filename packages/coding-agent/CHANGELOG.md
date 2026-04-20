@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added auto session title generation in interactive mode. After every `agent_end` the TUI runs a background request to `claude-opus-4-7` (via Anthropic OAuth / Claude Code subscription) and updates the terminal tab title (`π - <title> - <cwd>`) when the topic changes. Manual `/name` (and extension `setSessionName`) entries are now tagged `source: "user"` and permanently disable auto-titling for the session, while generator-produced entries are tagged `source: "auto"`. Sessions without an Anthropic OAuth credential see a one-shot startup warning. Legacy `session_info` entries without a `source` field are treated as `"user"` for back-compat.
+
 ### Removed
 
 - Removed the interactive Anthropic subscription auth billing warning that printed on TUI startup whenever Anthropic OAuth or `sk-ant-oat...` keys were active.
