@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the interactive Anthropic subscription auth billing warning that printed on TUI startup whenever Anthropic OAuth or `sk-ant-oat...` keys were active.
+
 ### Fixed
 
 - Fixed coding-agent test expectations for current default models and missing-auth guidance.
