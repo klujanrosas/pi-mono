@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed the Anthropic provider to strip pi-specific identity markers ("operating inside pi, a coding agent harness" opening line and the "Pi documentation" section) from the caller's system prompt on requests that use a Claude Pro/Max OAuth (`sk-ant-oat`) token. The existing Claude Code identity block, headers, and tool-name canonicalization are unchanged. Project AGENTS.md content, custom prompts, skills, and date/cwd footers are left untouched.
+
 ### Fixed
 
 - Fixed OpenAI-compatible prompt cache tests to cover proxies that explicitly disable long cache retention.

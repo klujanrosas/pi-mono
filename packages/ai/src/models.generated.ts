@@ -8687,13 +8687,13 @@ export const MODELS = {
 			reasoning: false,
 			input: ["text"],
 			cost: {
-				input: 0.09999999999999999,
-				output: 0.32,
+				input: 0.12,
+				output: 0.38,
 				cacheRead: 0,
 				cacheWrite: 0,
 			},
 			contextWindow: 131072,
-			maxTokens: 16384,
+			maxTokens: 131072,
 		} satisfies Model<"openai-completions">,
 		"meta-llama/llama-3.3-70b-instruct:free": {
 			id: "meta-llama/llama-3.3-70b-instruct:free",

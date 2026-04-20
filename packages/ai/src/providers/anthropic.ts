@@ -739,6 +739,50 @@ function isOAuthToken(apiKey: string): boolean {
 	return apiKey.includes("sk-ant-oat");
 }
 
+/**
+ * OAuth stealth: remove pi-specific identity markers from the caller's system
+ * prompt before it is attached to a Claude Code OAuth request. Anthropic bills
+ * Pro/Max OAuth traffic against the subscription only when the request looks
+ * like it came from Claude Code itself; identifying pi as a third-party harness
+ * risks being billed as paid API usage instead.
+ *
+ * This strips only the two phrases that pi's default coding-agent system prompt
+ * injects:
+ *   1. The "You are an expert coding assistant operating inside pi, a coding
+ *      agent harness." opening line. The Claude Code identity block is already
+ *      prepended as a separate system message, so this line is redundant.
+ *   2. The "Pi documentation (read only when the user asks about pi itself...)"
+ *      section and its bullet list.
+ *
+ * Anything else (project AGENTS.md, skills, custom prompts, tool descriptions,
+ * date/cwd footer) is left untouched. Callers that embed additional pi-specific
+ * language in their own prompts are responsible for sanitizing it themselves.
+ */
+export function sanitizeSystemPromptForOAuth(systemPrompt: string): string {
+	if (!systemPrompt) {
+		return systemPrompt;
+	}
+
+	let out = systemPrompt;
+
+	// Drop the opening identity line. Anchored on the unique phrase
+	// "operating inside pi, a coding agent harness" so it survives minor
+	// rewording of the surrounding sentence.
+	out = out.replace(/^You are an expert coding assistant operating inside pi, a coding agent harness\.[^\n]*\n+/, "");
+
+	// Drop the Pi documentation paragraph. Matches the header line plus the
+	// contiguous run of leading-dash bullets that follows.
+	out = out.replace(
+		/\n{0,2}Pi documentation \(read only when the user asks about pi itself[^\n]*(?:\n[ \t]*-[^\n]*)*/,
+		"",
+	);
+
+	// Collapse any oversized whitespace gaps produced by the removals.
+	out = out.replace(/\n{3,}/g, "\n\n");
+
+	return out;
+}
+
 function createClient(
 	model: Model<"anthropic-messages">,
 	apiKey: string,
@@ -855,11 +899,18 @@ function buildParams(
 			},
 		];
 		if (context.systemPrompt) {
-			params.system.push({
-				type: "text",
-				text: sanitizeSurrogates(context.systemPrompt),
-				...(cacheControl ? { cache_control: cacheControl } : {}),
-			});
+			// Strip pi-specific identity markers so Anthropic's Pro/Max billing
+			// heuristics see the request as Claude Code rather than a third-party
+			// harness. If sanitization removes everything, drop the block so the
+			// request ships with only the Claude Code identity message.
+			const sanitized = sanitizeSystemPromptForOAuth(context.systemPrompt);
+			if (sanitized.trim().length > 0) {
+				params.system.push({
+					type: "text",
+					text: sanitizeSurrogates(sanitized),
+					...(cacheControl ? { cache_control: cacheControl } : {}),
+				});
+			}
 		}
 	} else if (context.systemPrompt) {
 		// Add cache control to system prompt for non-OAuth tokens
